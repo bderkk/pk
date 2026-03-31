@@ -215,6 +215,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!templatesGenerated) generateTemplates();
 
         // Copy video frame to offscreen canvas for OpenCV
+        if (!processCanvas.width || !processCanvas.height) return;
         processCtx.drawImage(videoElement, 0, 0, processCanvas.width, processCanvas.height);
 
         try {
@@ -238,7 +239,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 let contour = contours.get(i);
                 let area    = cv.contourArea(contour);
 
-                if (area < 4000 || area > 80000) continue;
+                if (area < 4000 || area > 80000) {
+                    contour.delete();
+                    continue;
+                }
 
                 let peri   = cv.arcLength(contour, true);
                 let approx = new cv.Mat();
@@ -300,6 +304,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     warped.delete(); M.delete(); srcTri.delete(); dstTri.delete();
                 }
                 approx.delete();
+                contour.delete();
             }
 
             // Deduplicate (keep first occurrence)
@@ -350,8 +355,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             src.delete(); gray.delete(); blur.delete(); edges.delete();
             contours.delete(); hierarchy.delete();
-        } catch (_) {
-            // Transient OpenCV errors during frame processing
+        } catch (err) {
+            console.error("Frame error:", err);
         }
     }
 
@@ -489,7 +494,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Odds calculation (Web Worker) ────────────────────────────────────────
     const workerCode = `
-        importScripts("https://cdn.jsdelivr.net/npm/pokersolver@2.1.4/pokersolver.js");
+        importScripts("https://cdn.jsdelivr.net/npm/pokersolver@2.1.4/dist/pokersolver.min.js");
         self.onmessage = function(e) {
             const { calcId, myCards, boardCards, numOpponents, iterations, RANKS, SUITS } = e.data;
             if (!self.Hand) { self.postMessage({ prob: 0, calcId }); return; }
@@ -532,8 +537,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const probPct = (prob * 100).toFixed(1);
         winProbText.innerText = `${probPct}%`;
 
+        winProbText.className = "text-3xl font-extrabold";
         if (prob > 0.5) winProbText.classList.add('win-gradient', 'text-emerald-400');
-        else winProbText.classList.remove('win-gradient', 'text-emerald-400');
+        else winProbText.classList.add('text-white');
 
         const fairShare = 1 / (state.numOpponents + 1);
         if (prob > fairShare * 1.5) {
