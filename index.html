@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Poker Advantage AI</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PokerSolver Library -->
+    <script src="https://cdn.jsdelivr.net/npm/pokersolver@2.1.4/pokersolver.js"></script>
+    <!-- FontAwesome for Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        body { 
+            background-color: #0B1120; 
+            color: #f8fafc; 
+            font-family: 'Inter', sans-serif; 
+            -webkit-tap-highlight-color: transparent;
+        }
+        .card-slot { 
+            width: 48px; 
+            height: 68px; 
+            border: 2px dashed #334155; 
+            border-radius: 8px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-weight: 800; 
+            font-size: 1.1rem; 
+            cursor: pointer; 
+            background: #1e293b; 
+            transition: all 0.2s; 
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .card-slot.active { 
+            border-color: #38bdf8; 
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); 
+            transform: scale(1.05);
+        }
+        .card-slot.filled { 
+            background: white; 
+            border: 1px solid #e2e8f0; 
+        }
+        video { 
+            object-fit: cover; 
+            transform: scaleX(-1);
+        }
+        .glass-panel { 
+            background: rgba(30, 41, 59, 0.65); 
+            backdrop-filter: blur(12px); 
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .hidden-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hidden-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col pt-5 px-4 pb-24 hidden-scrollbar relative overflow-x-hidden">
+    <div class="fixed top-0 left-0 w-full h-full overflow-hidden -z-10 pointer-events-none">
+        <div class="absolute top-[-10%] left-[-10%] w-64 h-64 bg-blue-600/20 rounded-full blur-[80px]"></div>
+        <div class="absolute bottom-[20%] right-[-10%] w-80 h-80 bg-emerald-600/10 rounded-full blur-[100px]"></div>
+    </div>
+    <header class="mb-5 text-center px-2">
+        <h1 class="text-3xl font-extrabold tracking-tight flex justify-center items-center gap-2">
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-emerald-400">Poker</span> AI
+        </h1>
+        <p class="text-slate-400 text-xs mt-1 font-medium tracking-wide uppercase">Analizador de Mesa</p>
+    </header>
+    <div class="relative w-full h-[220px] rounded-2xl overflow-hidden mb-5 shadow-2xl bg-black flex justify-center items-center ring-1 ring-slate-700">
+        <video id="camera-feed" autoplay playsinline class="w-full h-full absolute inset-0"></video>
+        <div class="absolute inset-4 pointer-events-none border-2 border-dashed border-emerald-500/40 rounded-xl flex items-center justify-center">
+            <div class="w-16 h-16 border-t-2 border-l-2 border-emerald-400 absolute top-0 left-0"></div>
+            <div class="w-16 h-16 border-t-2 border-r-2 border-emerald-400 absolute top-0 right-0"></div>
+            <div class="w-16 h-16 border-b-2 border-l-2 border-emerald-400 absolute bottom-0 left-0"></div>
+            <div class="w-16 h-16 border-b-2 border-r-2 border-emerald-400 absolute bottom-0 right-0"></div>
+        </div>
+        <div class="absolute bottom-3 left-0 right-0 flex justify-center gap-3 px-4">
+            <button id="scan-btn" class="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold py-2.5 px-6 rounded-full shadow-lg transform transition active:scale-95 flex items-center text-sm z-10">
+                <i class="fa-solid fa-expand mr-2"></i> Auto Detectar
+            </button>
+            <button id="camera-toggle-btn" class="bg-slate-800/80 backdrop-blur text-white w-10 h-10 rounded-full flex items-center justify-center border border-slate-600 z-10">
+                <i class="fa-solid fa-rotate"></i>
+            </button>
+        </div>
+    </div>
+    <div class="glass-panel rounded-2xl p-4 mb-5 relative overflow-hidden shadow-lg">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-md font-semibold text-slate-200"><i class="fa-solid fa-chart-pie mr-2 text-sky-400"></i>Predicción</h2>
+            <div class="flex items-center gap-2 bg-slate-800/50 rounded-lg px-2 py-1 border border-slate-700">
+                <i class="fa-solid fa-users text-slate-400 text-xs"></i>
+                <input type="number" id="opponents-input" value="1" min="1" max="9" class="w-8 bg-transparent border-none outline-none text-center font-bold text-white p-0">
+            </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+            <div class="bg-slate-900/60 rounded-xl p-3 text-center border border-slate-700/50">
+                <p class="text-slate-400 text-[10px] font-bold mb-1 tracking-wider uppercase">Win Prob</p>
+                <p id="win-prob" class="text-3xl font-extrabold text-white">--%</p>
+            </div>
+            <div class="bg-slate-900/60 rounded-xl p-3 text-center border border-slate-700/50 flex flex-col justify-center">
+                <p class="text-slate-400 text-[10px] font-bold mb-1 tracking-wider uppercase">Sugerencia</p>
+                <p id="advice-text" class="text-lg font-extrabold text-slate-500">ESPERANDO</p>
+            </div>
+        </div>
+        <div class="mt-3 text-center bg-slate-800/30 py-2 rounded-lg border border-slate-700/30">
+            <p id="hand-desc" class="text-slate-300 text-xs font-medium">Introduce tus cartas</p>
+        </div>
+    </div>
+    <div class="mb-4">
+        <h3 class="text-xs text-slate-400 mb-2 font-bold uppercase tracking-wider pl-1">Mano Propia</h3>
+        <div class="flex gap-3" id="hole-cards">
+            <div class="card-slot active" data-type="hole" data-index="0">?</div>
+            <div class="card-slot" data-type="hole" data-index="1">?</div>
+        </div>
+    </div>
+    <div>
+        <div class="flex justify-between items-end mb-2 pl-1 pr-1">
+            <h3 class="text-xs text-slate-400 font-bold uppercase tracking-wider">Comunitarias</h3>
+            <button id="clear-btn" class="text-xs text-red-400 hover:text-red-300 font-medium bg-red-400/10 px-2 py-1 rounded">
+                <i class="fa-solid fa-trash-can mr-1"></i>Reset
+            </button>
+        </div>
+        <div class="flex justify-between" id="board-cards">
+            <div class="card-slot" data-type="board" data-index="0">F1</div>
+            <div class="card-slot" data-type="board" data-index="1">F2</div>
+            <div class="card-slot" data-type="board" data-index="2">F3</div>
+            <div class="card-slot ml-1" data-type="board" data-index="3">T</div>
+            <div class="card-slot ml-1" data-type="board" data-index="4">R</div>
+        </div>
+    </div>
+    <div id="card-picker" class="fixed inset-x-0 bottom-0 bg-slate-800 border-t border-slate-600 rounded-t-3xl p-5 transform translate-y-full transition-transform duration-300 z-50">
+        <div class="flex justify-between items-center mb-5">
+            <h3 class="font-bold text-lg text-white">Valor de la Carta</h3>
+            <button id="close-picker-btn" class="w-8 h-8 rounded-full bg-slate-700 hover:bg-slate-600 flex items-center justify-center">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+        <div class="mb-5">
+            <div class="grid grid-cols-7 gap-1.5" id="rank-picker"></div>
+        </div>
+        <div>
+            <p class="text-xs text-slate-400 mb-2 font-bold tracking-wider">PALO</p>
+            <div class="grid grid-cols-4 gap-2" id="suit-picker"></div>
+        </div>
+    </div>
+    <div id="picker-overlay" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 hidden opacity-0 transition-opacity"></div>
+    <script src="app.js"></script>
+</body>
+</html>
