@@ -76,6 +76,78 @@ document.addEventListener('DOMContentLoaded', () => {
         return r + s; // yields 'Ac', 'Ts', '2h'
     }
 
+    // ── Camera ───────────────────────────────────────────────────────────────
+    async function startCamera() {
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        if (animFrameId) cancelAnimationFrame(animFrameId);
+        cardFrameCount = {};
+
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: state.facingMode, width: { ideal: 640 }, height: { ideal: 480 } }
+            });
+            videoElement.srcObject = stream;
+            videoElement.style.transform = state.facingMode === 'user' ? 'scaleX(-1)' : 'none';
+            canvas.style.transform   = state.facingMode === 'user' ? 'scaleX(-1)' : 'none';
+
+            videoElement.onloadedmetadata = () => {
+                videoElement.play();
+                canvas.width  = videoElement.videoWidth  || 640;
+                canvas.height = videoElement.videoHeight || 480;
+                processCanvas.width  = 416;
+                processCanvas.height = 416;
+                animFrameId = requestAnimationFrame(processFrame);
+            };
+        } catch (err) {
+            console.warn('Camera error:', err);
+            detectionStatus.innerHTML = '<div class="w-2 h-2 rounded-full bg-red-500 mr-2"></div> Sin cámara';
+        }
+    }
+
+    cameraToggleBtn.addEventListener('click', () => {
+        state.facingMode = state.facingMode === 'environment' ? 'user' : 'environment';
+        startCamera();
+    });
+
+    // ── Detection modal ──────────────────────────────────────────────────────
+    function showDetectionModal(cards) {
+        if (!detectionModal || pendingDetectedCards.length > 0) return;
+        isDetecting = false;
+        pendingDetectedCards = [...cards];
+        cardFrameCount = {};
+
+        detectedCardsDisplay.innerHTML = '';
+        cards.forEach(c => {
+            const isRed = c[1] === 'h' || c[1] === 'd';
+            const el = document.createElement('div');
+            el.className = `w-12 h-16 rounded-lg flex flex-col items-center justify-center font-extrabold text-lg border-2 ${isRed ? 'text-red-500 bg-white border-red-300' : 'text-slate-800 bg-white border-slate-300'}`;
+            const rank = c[0] === 'T' ? '10' : c[0];
+            const suit = SUIT_SYMBOLS[c[1]] || c[1];
+            el.innerHTML = `<span>${rank}</span><span class="text-base">${suit}</span>`;
+            detectedCardsDisplay.appendChild(el);
+        });
+
+        detectionModal.classList.remove('hidden');
+        detectionModal.classList.add('flex');
+        requestAnimationFrame(() => {
+            detectionModalContent.classList.remove('scale-95', 'opacity-0');
+            detectionModalContent.classList.add('scale-100', 'opacity-100');
+        });
+    }
+
+    function hideDetectionModal() {
+        detectionModalContent.classList.remove('scale-100', 'opacity-100');
+        detectionModalContent.classList.add('scale-95', 'opacity-0');
+        setTimeout(() => {
+            detectionModal.classList.add('hidden');
+            detectionModal.classList.remove('flex');
+        }, 300);
+        pendingDetectedCards = [];
+        isDetecting = true;
+        cardFrameCount = {};
+    }
+
+    // ── ONNX Model ───────────────────────────────────────────────────────────
     async function ensureModel() {
         if (ortSession || isModelLoading) return;
         isModelLoading = true;
