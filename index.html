@@ -85,11 +85,11 @@
             <div class="w-16 h-16 border-b-2 border-l-2 border-emerald-400 absolute bottom-0 left-0"></div>
             <div class="w-16 h-16 border-b-2 border-r-2 border-emerald-400 absolute bottom-0 right-0"></div>
         </div>
-        <div class="absolute bottom-3 left-0 right-0 flex justify-center gap-3 px-4 z-20">
-            <button id="scan-btn" class="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold py-2.5 px-6 rounded-full shadow-lg transform transition active:scale-95 flex items-center text-sm z-10">
-                <i class="fa-solid fa-expand mr-2"></i> Auto Detectar (<span id="detected-count">0</span>)
-            </button>
-            <button id="camera-toggle-btn" class="bg-slate-800/80 backdrop-blur text-white w-10 h-10 rounded-full flex items-center justify-center border border-slate-600 z-10">
+        <div class="absolute bottom-3 left-0 right-0 flex justify-between items-center px-4 z-20">
+            <div id="detection-status" class="bg-slate-800/80 backdrop-blur text-slate-300 font-medium py-2 px-4 rounded-full flex items-center text-xs z-10 border border-slate-600 shadow-lg transition-opacity duration-300">
+                <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse mr-2"></div> Buscando cartas...
+            </div>
+            <button id="camera-toggle-btn" class="bg-slate-800/80 backdrop-blur text-white w-10 h-10 rounded-full flex items-center justify-center border border-slate-600 shadow-lg z-10 hover:bg-slate-700 transition">
                 <i class="fa-solid fa-rotate"></i>
             </button>
         </div>
@@ -154,6 +154,29 @@
         </div>
     </div>
     <div id="picker-overlay" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 hidden opacity-0 transition-opacity"></div>
+    
+    <!-- Modal de Detección en Tiempo Real -->
+    <div id="detection-modal" class="fixed inset-0 bg-slate-900/85 backdrop-blur-md z-[60] hidden flex-col items-center justify-center p-4">
+        <div id="detection-modal-content" class="bg-slate-800 border-2 border-slate-600/50 rounded-2xl p-6 w-full max-w-sm text-center shadow-[0_0_40px_rgba(0,0,0,0.5)] transform scale-95 opacity-0 transition-all duration-300">
+            <h3 class="font-bold text-xl text-white mb-2">Nuevas Cartas</h3>
+            <div id="detected-cards-display" class="flex justify-center gap-2 mb-6 min-h-[68px]">
+                <!-- Las cartas detectadas aparecerán aquí -->
+            </div>
+            <p class="text-sm text-slate-300 mb-5 font-medium">¿Dónde quieres colocarlas?</p>
+            <div class="flex gap-3 mb-2">
+                <button id="assign-hole-btn" class="flex-1 bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 border border-blue-400/30 text-white font-bold py-3 px-2 rounded-xl transition shadow-lg flex flex-col items-center">
+                    <i class="fa-solid fa-hand-holding mb-1"></i> Mano Propia
+                </button>
+                <button id="assign-board-btn" class="flex-1 bg-gradient-to-b from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 border border-emerald-400/30 text-white font-bold py-3 px-2 rounded-xl transition shadow-lg flex flex-col items-center">
+                    <i class="fa-solid fa-table mb-1"></i> Comunitarias
+                </button>
+            </div>
+            <button id="discard-det-btn" class="mt-4 py-2 px-6 rounded-lg text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-700/50 transition border border-transparent hover:border-slate-600">
+                <i class="fa-solid fa-times mr-1"></i> Ignorar
+            </button>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>

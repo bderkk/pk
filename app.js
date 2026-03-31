@@ -27,8 +27,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const processCanvas = document.createElement('canvas');
     const processCtx = processCanvas.getContext('2d', { willReadFrequently: true });
 
-    const scanBtn = document.getElementById('scan-btn');
-    const detectedCount = document.getElementById('detected-count');
+    const detectionStatus = document.getElementById('detection-status');
+    const detectionModal = document.getElementById('detection-modal');
+    const detectionModalContent = document.getElementById('detection-modal-content');
+    const detectedCardsDisplay = document.getElementById('detected-cards-display');
+    const assignHoleBtn = document.getElementById('assign-hole-btn');
+    const assignBoardBtn = document.getElementById('assign-board-btn');
+    const discardDetBtn = document.getElementById('discard-det-btn');
+    let isDetecting = true;
+    let pendingDetectedCards = [];
     const cameraToggleBtn = document.getElementById('camera-toggle-btn');
     const clearBtn = document.getElementById('clear-btn');
     const cardSlots = document.querySelectorAll('.card-slot');
@@ -154,21 +161,37 @@ document.addEventListener('DOMContentLoaded', () => {
         return bestScore > 0.45 ? bestKey : null;
     }
 
-    // ── Auto-fill a single stable card ──────────────────────────────────────
-    function autoFillCard(card) {
-        const all = [...state.hole, ...state.board];
-        if (all.includes(card)) return;
+    // ── Real-time Modal Logic ────────────────────────────────────────────────
+    function showDetectionModal(cards) {
+        if (!isDetecting) return;
+        isDetecting = false;
+        pendingDetectedCards = cards;
+        
+        detectedCardsDisplay.innerHTML = '';
+        cards.forEach(card => {
+            const pRank = card[0] === 'T' ? '10' : card[0];
+            const suitObj = SUITS.find(s => s.id === card[1]);
+            const colorCl = ['h','d'].includes(card[1]) ? 'text-red-500' : 'text-slate-800';
+            const html = `<div class="w-12 h-16 bg-white border border-slate-300 rounded shadow flex flex-col items-center justify-center leading-none ${colorCl}"><span class="text-xl font-bold">${pRank}</span><span class="text-lg">${suitObj.icon}</span></div>`;
+            detectedCardsDisplay.insertAdjacentHTML('beforeend', html);
+        });
 
-        if      (!state.hole[0])  state.hole[0]  = card;
-        else if (!state.hole[1])  state.hole[1]  = card;
-        else if (!state.board[0]) state.board[0] = card;
-        else if (!state.board[1]) state.board[1] = card;
-        else if (!state.board[2]) state.board[2] = card;
-        else if (!state.board[3]) state.board[3] = card;
-        else if (!state.board[4]) state.board[4] = card;
-        else return;
+        detectionStatus.classList.add('opacity-0');
+        detectionModal.classList.remove('hidden');
+        // trigger reflow
+        void detectionModal.offsetWidth;
+        detectionModalContent.classList.remove('scale-95', 'opacity-0');
+    }
 
-        updateUI();
+    function hideDetectionModal() {
+        detectionModalContent.classList.add('scale-95', 'opacity-0');
+        setTimeout(() => {
+            detectionModal.classList.add('hidden');
+            detectionStatus.classList.remove('opacity-0');
+            pendingDetectedCards.forEach(c => cardFrameCount[c] = 0); // Reset stability
+            pendingDetectedCards = [];
+            isDetecting = true;
+        }, 300);
     }
 
     // ── Main frame loop ──────────────────────────────────────────────────────
@@ -304,17 +327,26 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             lastScannedCards = unique.map(d => d.card);
-            detectedCount.innerText = lastScannedCards.length;
 
-            // Stability counter → auto-fill on reaching threshold
-            let newCounts = {};
-            for (const card of lastScannedCards) {
-                newCounts[card] = (cardFrameCount[card] || 0) + 1;
-                if (newCounts[card] === STABLE_FRAMES) {
-                    autoFillCard(card);
+            if (isDetecting) {
+                let newCounts = {};
+                let stableNewCards = [];
+                const allAssigned = [...state.hole, ...state.board];
+
+                for (const card of lastScannedCards) {
+                    newCounts[card] = (cardFrameCount[card] || 0) + 1;
+                    if (newCounts[card] >= STABLE_FRAMES && !allAssigned.includes(card)) {
+                        stableNewCards.push(card);
+                    }
                 }
+                cardFrameCount = newCounts;
+
+                if (stableNewCards.length > 0) {
+                    showDetectionModal(stableNewCards);
+                }
+            } else {
+                cardFrameCount = {};
             }
-            cardFrameCount = newCounts;
 
             src.delete(); gray.delete(); blur.delete(); edges.delete();
             contours.delete(); hierarchy.delete();
@@ -431,35 +463,91 @@ document.addEventListener('DOMContentLoaded', () => {
         calculateOddsUI();
     });
 
-    // Manual scan button — applies currently visible cards immediately
-    scanBtn.addEventListener('click', () => {
-        if (lastScannedCards.length === 0) {
-            scanBtn.innerHTML = '<i class="fa-solid fa-triangle-exclamation mr-2"></i> Acércate más...';
-            setTimeout(() => {
-                scanBtn.innerHTML = `<i class="fa-solid fa-expand mr-2"></i> Auto Detectar (<span id="detected-count">${lastScannedCards.length}</span>)`;
-            }, 1500);
-            return;
-        }
-
-        scanBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> Escaneando...';
-        setTimeout(() => {
-            let existing = [...state.hole, ...state.board].filter(c => c);
-            lastScannedCards.forEach(c => {
-                if (existing.includes(c)) return;
-                if      (!state.hole[0])  state.hole[0]  = c;
-                else if (!state.hole[1])  state.hole[1]  = c;
-                else if (!state.board[0]) state.board[0] = c;
-                else if (!state.board[1]) state.board[1] = c;
-                else if (!state.board[2]) state.board[2] = c;
-                else if (!state.board[3]) state.board[3] = c;
-                else if (!state.board[4]) state.board[4] = c;
-            });
-            scanBtn.innerHTML = `<i class="fa-solid fa-expand mr-2"></i> Auto Detectar (<span id="detected-count">${lastScannedCards.length}</span>)`;
-            updateUI();
-        }, 400);
+    // Modal Handlers
+    assignHoleBtn.addEventListener('click', () => {
+        pendingDetectedCards.forEach(c => {
+            if (!state.hole[0]) state.hole[0] = c;
+            else if (!state.hole[1]) state.hole[1] = c;
+        });
+        updateUI();
+        hideDetectionModal();
     });
 
-    // ── Odds calculation ─────────────────────────────────────────────────────
+    assignBoardBtn.addEventListener('click', () => {
+        pendingDetectedCards.forEach(c => {
+            if (!state.board[0]) state.board[0] = c;
+            else if (!state.board[1]) state.board[1] = c;
+            else if (!state.board[2]) state.board[2] = c;
+            else if (!state.board[3]) state.board[3] = c;
+            else if (!state.board[4]) state.board[4] = c;
+        });
+        updateUI();
+        hideDetectionModal();
+    });
+
+    discardDetBtn.addEventListener('click', hideDetectionModal);
+
+    // ── Odds calculation (Web Worker) ────────────────────────────────────────
+    const workerCode = `
+        importScripts("https://cdn.jsdelivr.net/npm/pokersolver@2.1.4/pokersolver.js");
+        self.onmessage = function(e) {
+            const { calcId, myCards, boardCards, numOpponents, iterations, RANKS, SUITS } = e.data;
+            if (!self.Hand) { self.postMessage({ prob: 0, calcId }); return; }
+            const fullDeck = RANKS.flatMap(r => SUITS.map(s => r + s.id));
+            let wins = 0, ties = 0;
+            const known = [...myCards, ...boardCards];
+            let remainingDeck = fullDeck.filter(c => !known.includes(c));
+
+            for (let i = 0; i < iterations; i++) {
+                let deck = [...remainingDeck];
+                for (let j = deck.length - 1; j > 0; j--) {
+                    const k = Math.floor(Math.random() * (j + 1));
+                    [deck[j], deck[k]] = [deck[k], deck[j]];
+                }
+                let simBoard = [...boardCards];
+                let di = 0;
+                while (simBoard.length < 5) simBoard.push(deck[di++]);
+
+                let myHand = Hand.solve([...myCards, ...simBoard]);
+                let oppHands = [];
+                for (let o = 0; o < numOpponents; o++) {
+                    oppHands.push(Hand.solve([deck[di++], deck[di++], ...simBoard]));
+                }
+
+                let winners = Hand.winners([myHand, ...oppHands]);
+                if (winners.length === 1 && winners[0] === myHand) wins++;
+                else if (winners.includes(myHand)) ties++;
+            }
+            self.postMessage({ prob: (wins + ties / (numOpponents + 1)) / iterations, calcId });
+        };
+    `;
+    const workerBlob = new Blob([workerCode], {type: 'application/javascript'});
+    const oddsWorker = new Worker(URL.createObjectURL(workerBlob));
+    let currentOddsCalcId = 0;
+
+    oddsWorker.onmessage = (e) => {
+        const { prob, calcId } = e.data;
+        if (calcId !== currentOddsCalcId) return;
+
+        const probPct = (prob * 100).toFixed(1);
+        winProbText.innerText = `${probPct}%`;
+
+        if (prob > 0.5) winProbText.classList.add('win-gradient', 'text-emerald-400');
+        else winProbText.classList.remove('win-gradient', 'text-emerald-400');
+
+        const fairShare = 1 / (state.numOpponents + 1);
+        if (prob > fairShare * 1.5) {
+            adviceText.innerText  = '🔥 APOSTAR / SUBIR';
+            adviceText.className  = 'text-lg font-extrabold text-emerald-400 drop-shadow-[0_0_10px_rgba(52,211,153,0.5)]';
+        } else if (prob > fairShare * 0.85) {
+            adviceText.innerText  = '👀 IGUALAR (CALL)';
+            adviceText.className  = 'text-lg font-extrabold text-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.5)]';
+        } else {
+            adviceText.innerText  = '🛑 RETIRARSE (FOLD)';
+            adviceText.className  = 'text-lg font-extrabold text-red-500 drop-shadow-[0_0_10px_rgba(239,68,68,0.5)]';
+        }
+    };
+
     function calculateOddsUI() {
         const myCards    = state.hole.filter(c => c);
         const boardCards = state.board.filter(c => c);
@@ -469,6 +557,7 @@ document.addEventListener('DOMContentLoaded', () => {
             adviceText.innerText  = 'ESPERANDO...';
             adviceText.className  = 'text-lg font-extrabold text-slate-500';
             handDescText.innerText = 'Introduce tus 2 cartas';
+            currentOddsCalcId++; // cancel previous
             return;
         }
 
@@ -481,57 +570,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         winProbText.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-lg text-slate-400"></i>';
+        adviceText.innerText  = 'CALCULANDO...';
+        adviceText.className  = 'text-sm font-bold text-slate-400 mt-1';
 
-        setTimeout(() => {
-            if (!window.Hand) return;
-            const prob    = calculateOdds(myCards, boardCards, state.numOpponents, 2500);
-            const probPct = (prob * 100).toFixed(1);
-            winProbText.innerText = `${probPct}%`;
+        currentOddsCalcId++;
+        let iterations = 2500;
+        if (boardCards.length === 0) iterations = 800; // Less for preflop to respond faster
 
-            if (prob > 0.5) winProbText.classList.add('win-gradient');
-            else winProbText.classList.remove('win-gradient');
-
-            const fairShare = 1 / (state.numOpponents + 1);
-            if (prob > fairShare * 1.5) {
-                adviceText.innerText  = '🔥 APOSTAR / SUBIR';
-                adviceText.className  = 'text-lg font-extrabold text-emerald-400 drop-shadow-[0_0_10px_rgba(52,211,153,0.5)]';
-            } else if (prob > fairShare * 0.85) {
-                adviceText.innerText  = '👀 IGUALAR (CALL)';
-                adviceText.className  = 'text-lg font-extrabold text-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.5)]';
-            } else {
-                adviceText.innerText  = '🛑 RETIRARSE (FOLD)';
-                adviceText.className  = 'text-lg font-extrabold text-red-500 drop-shadow-[0_0_10px_rgba(239,68,68,0.5)]';
-            }
-        }, 50);
-    }
-
-    function calculateOdds(myCards, boardCards, numOpponents, iterations) {
-        if (!window.Hand) return 0;
-        const fullDeck = RANKS.flatMap(r => SUITS.map(s => r + s.id));
-        let wins = 0, ties = 0;
-        const known = [...myCards, ...boardCards];
-        let remainingDeck = fullDeck.filter(c => !known.includes(c));
-
-        for (let i = 0; i < iterations; i++) {
-            let deck = [...remainingDeck];
-            for (let j = deck.length - 1; j > 0; j--) {
-                const k = Math.floor(Math.random() * (j + 1));
-                [deck[j], deck[k]] = [deck[k], deck[j]];
-            }
-            let simBoard = [...boardCards];
-            let di = 0;
-            while (simBoard.length < 5) simBoard.push(deck[di++]);
-
-            let myHand = Hand.solve([...myCards, ...simBoard]);
-            let oppHands = [];
-            for (let o = 0; o < numOpponents; o++)
-                oppHands.push(Hand.solve([deck[di++], deck[di++], ...simBoard]));
-
-            let winners = Hand.winners([myHand, ...oppHands]);
-            if (winners.length === 1 && winners[0] === myHand) wins++;
-            else if (winners.includes(myHand)) ties++;
-        }
-        return (wins + ties / (numOpponents + 1)) / iterations;
+        oddsWorker.postMessage({
+            calcId: currentOddsCalcId,
+            myCards,
+            boardCards,
+            numOpponents: state.numOpponents,
+            iterations,
+            RANKS,
+            SUITS
+        });
     }
 
     // ── Boot ─────────────────────────────────────────────────────────────────
