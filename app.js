@@ -60,305 +60,177 @@ document.addEventListener('DOMContentLoaded', () => {
         return (c[0] === 'T' ? '10' : c[0]) + (SUIT_SYMBOLS[c[1]] || c[1]);
     }
 
-    // ── Template generation ──────────────────────────────────────────────────
-    function generateTemplates() {
-        if (!window.cv) return;
-        const fontStr = 'bold 44px Arial';
-        const tCanvas = document.createElement('canvas');
-        tCanvas.width = 60; tCanvas.height = 60;
-        const tCtx = tCanvas.getContext('2d', { willReadFrequently: true });
-        tCtx.textBaseline = 'top';
+    
+    // ── ONNX Web Inference ───────────────────────────────────────────────────
+    let ortSession = null;
+    let isModelLoading = false;
+    const MODEL_CLASSES = ['10c','10d','10h','10s','2c','2d','2h','2s','3c','3d','3h','3s','4c','4d','4h','4s','5c','5d','5h','5s','6c','6d','6h','6s','7c','7d','7h','7s','8c','8d','8h','8s','9c','9d','9h','9s','Ac','Ad','Ah','As','Jc','Jd','Jh','Js','Kc','Kd','Kh','Ks','Qc','Qd','Qh','Qs'];
 
-        RANKS.forEach(r => {
-            tCtx.fillStyle = 'white'; tCtx.fillRect(0, 0, 60, 60);
-            tCtx.fillStyle = 'black'; tCtx.font = fontStr;
-            tCtx.fillText(r === 'T' ? '10' : r, 5, 5);
-            let mat = cv.imread(tCanvas);
-            cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
-            cv.threshold(mat, mat, 128, 255, cv.THRESH_BINARY_INV);
-            let rect = cv.boundingRect(mat);
-            if (rect.width > 0 && rect.height > 0) {
-                let crop = mat.roi(rect).clone();
-                cv.resize(crop, crop, new cv.Size(30, 30));
-                templates.ranks[r] = crop;
-            }
-            mat.delete();
-        });
-
-        const suitText = { s: '♠', h: '♥', d: '♦', c: '♣' };
-        SUITS.forEach(s => {
-            tCtx.fillStyle = 'white'; tCtx.fillRect(0, 0, 60, 60);
-            tCtx.fillStyle = 'black'; tCtx.font = fontStr;
-            tCtx.fillText(suitText[s.id], 5, 5);
-            let mat = cv.imread(tCanvas);
-            cv.cvtColor(mat, mat, cv.COLOR_RGBA2GRAY);
-            cv.threshold(mat, mat, 128, 255, cv.THRESH_BINARY_INV);
-            let rect = cv.boundingRect(mat);
-            if (rect.width > 0 && rect.height > 0) {
-                let crop = mat.roi(rect).clone();
-                cv.resize(crop, crop, new cv.Size(30, 30));
-                templates.suits[s.id] = crop;
-            }
-            mat.delete();
-        });
-        templatesGenerated = true;
+    function getStandardCard(clsName) {
+        if (!clsName) return null;
+        let c = clsName.toLowerCase();
+        let r = c.slice(0, -1);
+        if (r === '10') r = 'T';
+        else r = r.toUpperCase();
+        let s = c.slice(-1);
+        return r + s; // yields 'Ac', 'Ts', '2h'
     }
 
-    // ── Camera ───────────────────────────────────────────────────────────────
-    async function startCamera() {
-        if (stream) stream.getTracks().forEach(t => t.stop());
-        if (animFrameId) cancelAnimationFrame(animFrameId);
-        cardFrameCount = {};
-
+    async function ensureModel() {
+        if (ortSession || isModelLoading) return;
+        isModelLoading = true;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: state.facingMode, width: { ideal: 640 }, height: { ideal: 480 } }
-            });
-            videoElement.srcObject = stream;
-            videoElement.style.transform = state.facingMode === 'user' ? 'scaleX(-1)' : 'none';
-            canvas.style.transform   = state.facingMode === 'user' ? 'scaleX(-1)' : 'none';
-
-            videoElement.onloadedmetadata = () => {
-                videoElement.play();
-                const vw = videoElement.videoWidth  || 640;
-                const vh = videoElement.videoHeight || 480;
-                canvas.width  = vw; canvas.height  = vh;
-                processCanvas.width = vw; processCanvas.height = vh;
-                animFrameId = requestAnimationFrame(processFrame);
-            };
+            if (typeof ort !== 'undefined') {
+                ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+                ortSession = await ort.InferenceSession.create('yolov8s_playing_cards.onnx');
+                detectionStatus.innerHTML = '<div class="w-2 h-2 rounded-full bg-emerald-500 mr-2"></div> ML Activo';
+            }
         } catch (err) {
-            console.warn('Camera error:', err);
+            console.error('ONNX model load error:', err);
+            detectionStatus.innerHTML = '<div class="w-2 h-2 rounded-full bg-red-500 mr-2"></div> ML Error';
         }
+        isModelLoading = false;
     }
 
-    cameraToggleBtn.addEventListener('click', () => {
-        state.facingMode = state.facingMode === 'environment' ? 'user' : 'environment';
-        startCamera();
-    });
-
-    // ── OpenCV helpers ───────────────────────────────────────────────────────
-    function orderPoints(pts) {
-        pts.sort((a, b) => a.x - b.x);
-        let left  = [pts[0], pts[1]].sort((a, b) => a.y - b.y);
-        let right = [pts[2], pts[3]].sort((a, b) => a.y - b.y);
-        return [left[0], right[0], right[1], left[1]]; // TL TR BR BL
-    }
-
-    function matchTemplateMat(imgMat, tempDict) {
-        if (imgMat.cols === 0 || imgMat.rows === 0) return null;
-        let bestScore = -1, bestKey = null;
-        let resized = new cv.Mat();
-        cv.resize(imgMat, resized, new cv.Size(30, 30));
-
-        for (let key in tempDict) {
-            let result = new cv.Mat();
-            cv.matchTemplate(resized, tempDict[key], result, cv.TM_CCOEFF_NORMED);
-            let mm = cv.minMaxLoc(result);
-            if (mm.maxVal > bestScore) { bestScore = mm.maxVal; bestKey = key; }
-            result.delete();
+    async function processFrame() {
+        if (!ortSession) {
+            await ensureModel();
+            animFrameId = requestAnimationFrame(processFrame);
+            return;
         }
-        resized.delete();
-        return bestScore > 0.45 ? bestKey : null;
-    }
 
-    // ── Real-time Modal Logic ────────────────────────────────────────────────
-    function showDetectionModal(cards) {
-        if (!isDetecting) return;
-        isDetecting = false;
-        pendingDetectedCards = cards;
-        
-        detectedCardsDisplay.innerHTML = '';
-        cards.forEach(card => {
-            const pRank = card[0] === 'T' ? '10' : card[0];
-            const suitObj = SUITS.find(s => s.id === card[1]);
-            const colorCl = ['h','d'].includes(card[1]) ? 'text-red-500' : 'text-slate-800';
-            const html = `<div class="w-12 h-16 bg-white border border-slate-300 rounded shadow flex flex-col items-center justify-center leading-none ${colorCl}"><span class="text-xl font-bold">${pRank}</span><span class="text-lg">${suitObj.icon}</span></div>`;
-            detectedCardsDisplay.insertAdjacentHTML('beforeend', html);
-        });
+        if (!videoElement.srcObject || videoElement.readyState < 2) {
+            animFrameId = requestAnimationFrame(processFrame);
+            return;
+        }
 
-        detectionStatus.classList.add('opacity-0');
-        detectionModal.classList.remove('hidden');
-        // trigger reflow
-        void detectionModal.offsetWidth;
-        detectionModalContent.classList.remove('scale-95', 'opacity-0');
-    }
-
-    function hideDetectionModal() {
-        detectionModalContent.classList.add('scale-95', 'opacity-0');
-        setTimeout(() => {
-            detectionModal.classList.add('hidden');
-            detectionStatus.classList.remove('opacity-0');
-            pendingDetectedCards.forEach(c => cardFrameCount[c] = 0); // Reset stability
-            pendingDetectedCards = [];
-            isDetecting = true;
-        }, 300);
-    }
-
-    // ── Main frame loop ──────────────────────────────────────────────────────
-    function processFrame() {
-        animFrameId = requestAnimationFrame(processFrame);
-
-        if (!videoElement.srcObject || videoElement.readyState < 2) return;
-
-        // Keep overlay canvas dimensions in sync with video
         if (videoElement.videoWidth > 0 && canvas.width !== videoElement.videoWidth) {
             canvas.width  = videoElement.videoWidth;
             canvas.height = videoElement.videoHeight;
-            processCanvas.width  = canvas.width;
-            processCanvas.height = canvas.height;
+            processCanvas.width = 416;
+            processCanvas.height = 416;
         }
 
-        // Clear overlay — video element shows through (canvas is transparent)
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!processCanvas.width || !processCanvas.height) {
+            animFrameId = requestAnimationFrame(processFrame);
+            return;
+        }
 
-        if (!window.cvReady || !window.cv || typeof cv.Mat !== 'function') return;
-        if (!templatesGenerated) generateTemplates();
-
-        // Copy video frame to offscreen canvas for OpenCV
-        if (!processCanvas.width || !processCanvas.height) return;
-        processCtx.drawImage(videoElement, 0, 0, processCanvas.width, processCanvas.height);
+        if (!isDetecting) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // clear overlay
+            animFrameId = requestAnimationFrame(processFrame);
+            return; // Pause ML effectively
+        }
 
         try {
-            let src  = cv.imread(processCanvas);
-            let gray = new cv.Mat();
-            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+            const ctxP = processCanvas.getContext('2d', { willReadFrequently: true });
+            ctxP.drawImage(videoElement, 0, 0, 416, 416);
+            let imgData = ctxP.getImageData(0, 0, 416, 416).data;
 
-            let blur = new cv.Mat();
-            cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-
-            let edges = new cv.Mat();
-            cv.Canny(blur, edges, 50, 150, 3, false);
-
-            let contours  = new cv.MatVector();
-            let hierarchy = new cv.Mat();
-            cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-            let currentDetected = []; // {card, bbox}
-
-            for (let i = 0; i < contours.size(); i++) {
-                let contour = contours.get(i);
-                let area    = cv.contourArea(contour);
-
-                if (area < 4000 || area > 80000) {
-                    contour.delete();
-                    continue;
-                }
-
-                let peri   = cv.arcLength(contour, true);
-                let approx = new cv.Mat();
-                cv.approxPolyDP(contour, approx, 0.02 * peri, true);
-
-                if (approx.rows === 4) {
-                    let points = [];
-                    for (let j = 0; j < 4; j++)
-                        points.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
-                    let ordered = orderPoints(points);
-
-                    const W = 200, H = 300;
-                    let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-                        ordered[0].x, ordered[0].y,
-                        ordered[1].x, ordered[1].y,
-                        ordered[2].x, ordered[2].y,
-                        ordered[3].x, ordered[3].y
-                    ]);
-                    let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, W,0, W,H, 0,H]);
-                    let M      = cv.getPerspectiveTransform(srcTri, dstTri);
-                    let warped = new cv.Mat();
-                    cv.warpPerspective(gray, warped, M, new cv.Size(W, H));
-
-                    let cornerMat    = warped.roi(new cv.Rect(0, 0, 50, 110));
-                    let cornerThresh = new cv.Mat();
-                    cv.adaptiveThreshold(cornerMat, cornerThresh, 255,
-                        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 15, 4);
-
-                    let kernel = cv.Mat.ones(2, 2, cv.CV_8U);
-                    cv.morphologyEx(cornerThresh, cornerThresh, cv.MORPH_OPEN, kernel);
-
-                    let cc = new cv.MatVector();
-                    let ch = new cv.Mat();
-                    cv.findContours(cornerThresh, cc, ch, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-                    let symRects = [];
-                    for (let k = 0; k < cc.size(); k++) {
-                        let cr = cv.boundingRect(cc.get(k));
-                        if (cr.width > 5 && cr.height > 10 && cr.width < 45 && cr.height < 45)
-                            symRects.push(cr);
-                    }
-                    symRects.sort((a, b) => a.y - b.y);
-
-                    if (symRects.length >= 2) {
-                        let rMat = cornerThresh.roi(symRects[0]);
-                        let sMat = cornerThresh.roi(symRects[1]);
-                        let bRank = matchTemplateMat(rMat, templates.ranks);
-                        let bSuit = matchTemplateMat(sMat, templates.suits);
-
-                        if (bRank && bSuit) {
-                            let bbox = cv.boundingRect(contour);
-                            currentDetected.push({ card: bRank + bSuit, bbox });
-                        }
-                        rMat.delete(); sMat.delete();
-                    }
-
-                    cornerMat.delete(); cornerThresh.delete(); kernel.delete();
-                    cc.delete(); ch.delete();
-                    warped.delete(); M.delete(); srcTri.delete(); dstTri.delete();
-                }
-                approx.delete();
-                contour.delete();
+            // Prepare NCHW Float32 tensor for ONNX
+            const float32Data = new Float32Array(3 * 416 * 416);
+            for (let i = 0; i < 416 * 416; i++) {
+                float32Data[i] = imgData[i * 4] / 255.0;            
+                float32Data[416 * 416 + i] = imgData[i * 4 + 1] / 255.0;
+                float32Data[2 * 416 * 416 + i] = imgData[i * 4 + 2] / 255.0;
             }
 
-            // Deduplicate (keep first occurrence)
-            let seen = new Set();
-            let unique = currentDetected.filter(d => {
-                if (seen.has(d.card)) return false;
-                seen.add(d.card); return true;
-            });
+            const tensor = new ort.Tensor('float32', float32Data, [1, 3, 416, 416]);
+            const results = await ortSession.run({ images: tensor });
+            const output = results[ortSession.outputNames[0]];
 
-            // Draw green (or red) rectangles + labels on transparent overlay canvas
-            unique.forEach(({ card, bbox }) => {
-                const isRed = card[1] === 'h' || card[1] === 'd';
-                const color = isRed ? '#f87171' : '#34D399';
+            const numClasses = output.dims[1] - 4; // usually 52
+            const numAnchors = output.dims[2];
+            const data = output.data;
 
+            let boxes = [];
+            for (let i = 0; i < numAnchors; i++) {
+                let maxConf = 0;
+                let maxCls = -1;
+                for (let c = 0; c < numClasses; c++) {
+                    const conf = data[(4 + c) * numAnchors + i];
+                    if (conf > maxConf) { maxConf = conf; maxCls = c; }
+                }
+                
+                if (maxConf > 0.45) {
+                    const xc = data[0 * numAnchors + i];
+                    const yc = data[1 * numAnchors + i];
+                    const w  = data[2 * numAnchors + i];
+                    const h  = data[3 * numAnchors + i];
+                    
+                    const sx = canvas.width / 416;
+                    const sy = canvas.height / 416;
+                    
+                    boxes.push({
+                        x: (xc - w/2) * sx,
+                        y: (yc - h/2) * sy,
+                        w: w * sx,
+                        h: h * sy,
+                        conf: maxConf,
+                        cardStr: getStandardCard(MODEL_CLASSES[maxCls])
+                    });
+                }
+            }
+
+            // Standard NMS implementation
+            boxes.sort((a,b) => b.conf - a.conf);
+            let nmsBoxes = [];
+            for (let b of boxes) {
+                let keep = true;
+                for (let kept of nmsBoxes) {
+                    const interX = Math.max(0, Math.min(b.x+b.w, kept.x+kept.w) - Math.max(b.x, kept.x));
+                    const interY = Math.max(0, Math.min(b.y+b.h, kept.y+kept.h) - Math.max(b.y, kept.y));
+                    const interArea = interX * interY;
+                    const unionArea = b.w*b.h + kept.w*kept.h - interArea;
+                    if (interArea / unionArea > 0.45) { keep = false; break; }
+                }
+                if (keep) nmsBoxes.push(b);
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            let currentDetectedNames = [];
+
+            nmsBoxes.forEach(b => {
+                if (!b.cardStr) return;
+                const color = ['h','d'].includes(b.cardStr[1]) ? '#f87171' : '#34D399';
                 ctx.strokeStyle = color;
-                ctx.lineWidth   = 3;
-                ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
+                ctx.lineWidth = 3;
+                ctx.strokeRect(b.x, b.y, b.w, b.h);
 
-                // Label background
                 ctx.fillStyle = 'rgba(0,0,0,0.65)';
-                ctx.fillRect(bbox.x, bbox.y - 30, 58, 26);
+                ctx.fillRect(b.x, b.y - 30, 58, 26);
                 ctx.fillStyle = color;
-                ctx.font      = 'bold 18px Arial';
-                ctx.fillText(formatCard(card), bbox.x + 4, bbox.y - 9);
+                ctx.font = 'bold 18px Arial';
+                ctx.fillText(formatCard(b.cardStr), b.x + 4, b.y - 9);
+                
+                currentDetectedNames.push(b.cardStr);
             });
 
-            lastScannedCards = unique.map(d => d.card);
+            // Stability check for ML detection output
+            let newCounts = {};
+            let stableNewCards = [];
+            const allAssigned = [...state.hole, ...state.board];
 
-            if (isDetecting) {
-                let newCounts = {};
-                let stableNewCards = [];
-                const allAssigned = [...state.hole, ...state.board];
-
-                for (const card of lastScannedCards) {
-                    newCounts[card] = (cardFrameCount[card] || 0) + 1;
-                    if (newCounts[card] >= STABLE_FRAMES && !allAssigned.includes(card)) {
-                        stableNewCards.push(card);
-                    }
+            for (const c of currentDetectedNames) {
+                newCounts[c] = (cardFrameCount[c] || 0) + 1;
+                // STABLE_FRAMES can be 4 since ML is very stable
+                if (newCounts[c] >= 4 && !allAssigned.includes(c)) {
+                    stableNewCards.push(c);
                 }
-                cardFrameCount = newCounts;
+            }
+            cardFrameCount = newCounts;
 
-                if (stableNewCards.length > 0) {
-                    showDetectionModal(stableNewCards);
-                }
-            } else {
-                cardFrameCount = {};
+            if (stableNewCards.length > 0) {
+                showDetectionModal(stableNewCards);
             }
 
-            src.delete(); gray.delete(); blur.delete(); edges.delete();
-            contours.delete(); hierarchy.delete();
         } catch (err) {
-            console.error("Frame error:", err);
+            console.error("Frame error ML:", err);
         }
+
+        animFrameId = requestAnimationFrame(processFrame);
     }
+
 
     // ── Card picker UI ───────────────────────────────────────────────────────
     function initPickers() {
@@ -405,6 +277,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function openPicker(type, index) {
+        isDetecting = false;
+        pendingDetectedCards = [];
+        cardFrameCount = {};
         state.activeSlot = { type, index };
         state.pickingRank = null;
         updateUI();
@@ -423,6 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
         pickerOverlay.classList.add('opacity-0');
         setTimeout(() => pickerOverlay.classList.add('hidden'), 300);
         state.activeSlot = null;
+        isDetecting = true;
         updateUI();
     }
 
